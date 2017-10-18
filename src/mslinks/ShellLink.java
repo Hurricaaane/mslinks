@@ -16,6 +16,16 @@ package mslinks;
 
 import io.ByteReader;
 import io.ByteWriter;
+import mslinks.data.CNRLink;
+import mslinks.data.ItemID;
+import mslinks.data.LinkFlags;
+import mslinks.data.VolumeID;
+import mslinks.extra.ConsoleData;
+import mslinks.extra.ConsoleFEData;
+import mslinks.extra.EnvironmentVariable;
+import mslinks.extra.Stub;
+import mslinks.extra.Tracker;
+import mslinks.extra.VistaIDList;
 
 import java.io.File;
 import java.io.IOException;
@@ -28,17 +38,6 @@ import java.nio.file.Paths;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.regex.Pattern;
-
-import mslinks.data.CNRLink;
-import mslinks.data.ItemID;
-import mslinks.data.LinkFlags;
-import mslinks.data.VolumeID;
-import mslinks.extra.ConsoleData;
-import mslinks.extra.ConsoleFEData;
-import mslinks.extra.EnvironmentVariable;
-import mslinks.extra.Stub;
-import mslinks.extra.Tracker;
-import mslinks.extra.VistaIDList;
 
 public class ShellLink {
 	private static Map<String, String> env = System.getenv();
@@ -59,7 +58,8 @@ public class ShellLink {
 	private HashMap<Integer, Serializable> extra = new HashMap<>();
 	
 	private Path linkFileSource;
-	
+	private LinkHostDependency linkHostDependency;
+
 	public ShellLink() {
 		header = new ShellLinkHeader();
 		header.getLinkFlags().setIsUnicode();
@@ -245,18 +245,20 @@ public class ShellLink {
 		linkFileSource = Paths.get(path).toAbsolutePath().normalize();
 		if (Files.isDirectory(linkFileSource))
 			throw new IOException("path is directory!");
-		
-		if (!header.getLinkFlags().hasRelativePath()) {
-			Path target = Paths.get(resolveTarget());
-			Path origin = linkFileSource.getParent();
-			if (target.getRoot().equals(origin.getRoot())) 
-				setRelativePath(origin.relativize(target).toString());
-		}
-		
-		if (!header.getLinkFlags().hasWorkingDir()) {
-			Path target = Paths.get(resolveTarget());
-			if (!Files.isDirectory(target))
-				setWorkingDir(target.getParent().toString());
+
+		if (linkHostDependency == LinkHostDependency.RESOLVE_USING_HOST_FILE_SYSTEM) {
+			if (!header.getLinkFlags().hasRelativePath()) {
+				Path target = Paths.get(resolveTarget());
+				Path origin = linkFileSource.getParent();
+				if (target.getRoot().equals(origin.getRoot()))
+					setRelativePath(origin.relativize(target).toString());
+			}
+
+			if (!header.getLinkFlags().hasWorkingDir()) {
+				Path target = Paths.get(resolveTarget());
+				if (!Files.isDirectory(target))
+					setWorkingDir(target.getParent().toString());
+			}
 		}
 		
 		serialize(Files.newOutputStream(linkFileSource));
@@ -307,10 +309,17 @@ public class ShellLink {
 	 * Environment variables are accepted but resolved here and aren't kept in link.
 	 */
 	public ShellLink setTarget(String target) {
+		return setTarget(target, LinkHostDependency.RESOLVE_USING_HOST_FILE_SYSTEM);
+	}
+
+	private ShellLink setTarget(String target, LinkHostDependency linkHostDependency) {
+		this.linkHostDependency = linkHostDependency;
 		target = resolveEnvVariables(target);
-		
-		Path tar = Paths.get(target).toAbsolutePath();
-		target = tar.toString();
+
+		if (this.linkHostDependency == LinkHostDependency.RESOLVE_USING_HOST_FILE_SYSTEM) {
+			Path tar = Paths.get(target).toAbsolutePath();
+			target = tar.toString();
+		}
 		
 		if (target.startsWith("\\\\")) {
 			int p1 = target.indexOf('\\', 2);
@@ -319,9 +328,14 @@ public class ShellLink {
 			LinkInfo inf = createLinkInfo();
 			inf.createCommonNetworkRelativeLink().setNetName(target.substring(0, p2));
 			inf.setCommonPathSuffix(target.substring(p2+1));
-			
-			if (Files.isDirectory(Paths.get(target)))
+
+			if (this.linkHostDependency == LinkHostDependency.RESOLVE_USING_HOST_FILE_SYSTEM) {
+				if (Files.isDirectory(Paths.get(target)))
+					header.getFileAttributesFlags().setDirecory();
+
+			} else if (this.linkHostDependency == LinkHostDependency.DECLARATIVE_DIRECTORY) {
 				header.getFileAttributesFlags().setDirecory();
+			}
 			
 			header.getLinkFlags().setHasExpString();
 			extra.put(EnvironmentVariable.signature, new EnvironmentVariable().setVariable(target));
@@ -338,11 +352,20 @@ public class ShellLink {
 			LinkInfo inf = createLinkInfo();
 			inf.createVolumeID().setDriveType(VolumeID.DRIVE_FIXED);
 			inf.setLocalBasePath(target);
-			
-			if (Files.isDirectory(tar))
-				header.getFileAttributesFlags().setDirecory();
-			else 
-				idlist.getLast().setType(ItemID.TYPE_FILE);
+
+			if (this.linkHostDependency == LinkHostDependency.RESOLVE_USING_HOST_FILE_SYSTEM) {
+				if (Files.isDirectory(Paths.get(target).toAbsolutePath()))
+					header.getFileAttributesFlags().setDirecory();
+				else
+					idlist.getLast().setType(ItemID.TYPE_FILE);
+			} else {
+				if (this.linkHostDependency == LinkHostDependency.DECLARATIVE_DIRECTORY) {
+					header.getFileAttributesFlags().setDirecory();
+
+				} else {
+					idlist.getLast().setType(ItemID.TYPE_FILE);
+				}
+			}
 
 		} catch (ShellLinkException e) {}
 		
@@ -352,6 +375,24 @@ public class ShellLink {
 	public static ShellLink createLink(String target) {
 		ShellLink sl = new ShellLink();
 		sl.setTarget( target );
+		return sl;
+	}
+
+	/**
+	 * Create a link to a file. Links created this way do not rely on the host's filesystem.
+	 */
+	public static ShellLink createLinkToFile(String target) {
+		ShellLink sl = new ShellLink();
+		sl.setTarget( target, LinkHostDependency.DECLARATIVE_FILE);
+		return sl;
+	}
+
+	/**
+	 * Create a link to a directory. Links created this way do not rely on the host's filesystem.
+	 */
+	public static ShellLink createLinkToDirectory(String target) {
+		ShellLink sl = new ShellLink();
+		sl.setTarget( target, LinkHostDependency.DECLARATIVE_DIRECTORY);
 		return sl;
 	}
 	
