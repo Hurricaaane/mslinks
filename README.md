@@ -56,6 +56,29 @@ public class Main {
 }
 ```
 
+### Create shortcuts for a different machine
+
+Following uses the methods `createLinkToFile` and `createLinkToDirectory`, allowing shortcuts to be created on a Linux server to be downloaded and used on a Windows machine.
+
+```
+package mslinks;
+
+import java.io.IOException;
+
+public class Main {
+    public static void main(String[] args) throws IOException {
+        ShellLink sl = ShellLink.createLinkToFile("C:\\Program Files (x86)\\Mozilla Firefox\\firefox.exe")
+                .setCMDArgs("-devtools")
+                .setWorkingDir("C:\\Program Files (x86)\\Mozilla Firefox");
+
+        sl.saveTo("testlink.lnk");
+        System.out.println(sl.getWorkingDir());
+        System.out.println(sl.resolveTarget());
+    }
+}
+
+```
+
 ### Download
 * [releases page](https://github.com/BlackOverlord666/mslinks/releases)
 * [Maven Central Repository](http://search.maven.org/#search%7Cgav%7C1%7Cg%3A%22com.github.vatbub%22%20AND%20a%3A%22mslinks%22)
